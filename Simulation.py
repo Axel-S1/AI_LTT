@@ -7,10 +7,7 @@ def CSVtoNumpyArray(file_path):
     """Convertit un fichier CSV en tableau NumPy."""
     data = pd.read_csv(file_path)
     return data.to_numpy()
-def NumpyArraytoCSV(array, file_path):
-    """Convertit un tableau NumPy en fichier CSV."""
-    df = pd.DataFrame(array)
-    df.to_csv(file_path, index=False)
+
 FIRST_ORDER_INFO = ["long"]
 
 class Order():
@@ -27,40 +24,54 @@ class Order():
         self.close_cause = None
         
     def step(self, data):
-        if (self.value * (data[3] * self.leverage)) / self.initial_value <= self.SL:
+        if   (self.value * (1+((data[3]-1) * self.leverage))) / self.initial_value <= self.SL:
             self.value = self.initial_value * self.SL
             self.close_cause = "SL"
             self.close_time = data[-1]
             return True
             
-        elif (self.value * (data[2] * self.leverage)) / self.initial_value >= self.TP:
+        elif (self.value * (1+((data[2]-1) * self.leverage))) / self.initial_value >= self.TP:
             self.value = self.initial_value * self.TP
             self.close_cause = "TP"
             self.close_time = data[-1]
             return True
             
         else:
-            self.value = self.value * (data[4] * self.leverage)
+            self.value = self.value * (1+((data[4]-1) * self.leverage))
             return False
 
 class Simulation():
-    def __init__(self, ref_init_money, hist_data):
+    def __init__(self, sim_id, init_money, hist_data):
+        
+        self.ID = sim_id
+        self.hist_data = hist_data
+        
+        self.fees = 2e-4
+        self.min_bid = 25
+        self.initial_money = init_money
+        self.money = init_money
+        
         self.en_orders = []
         self.di_orders = []
-        self.money = ref_init_money
-        self.hist_data = hist_data
         
         self.simulation_data = []
         self.simulation_orders = []
-        self.fees = 2e-4
-        self.min_bid = 0
-    
+        self.fitness = 0
+        
+    def start(self):
+        for i in range(len(historical_data)-1):
+            sim1.step()
+            
+        self.__close_and_store_all_trades()
+        self.__update_info()
+        self.__fitness_score()
+        return self.fitness
+        
     def step(self):
         # TODO : une IA qui choisira si elle veux faire un ordre (long ou rien).
         # Avec les params de levier, valeur de l'ordre et les "stop loss and take profit".
-        if r.randint(0, 1000) == 3: # temporaire
-            self.__make_order(self.hist_data[0][-1], 1, self.money*0.05, 0.8, 1.1) # temporaire
-            self.temp = False
+        if r.randint(0, 100) == 3: # temporaire
+            self.__make_order(self.hist_data[0][-1], 5, self.money*0.05, 0.8, 1.2) # temporaire
             
         for order in self.en_orders:
             if order.step(self.hist_data[0]):
@@ -84,16 +95,24 @@ class Simulation():
         # Ajout des informations à l'historique
         info = {
             "timestamp" : self.hist_data[0][0],
-            "wallet_money": self.money,
-            "invest_money": invest_money,
+            "wallet_money": self.money, #
+            "invest_money": invest_money, #
             "all_money" : self.money + invest_money,
-            "nb_en_orders": nb_en_orders,
+            "nb_en_orders": nb_en_orders, #
             "nb_di_orders": nb_di_orders,
             "nb_any_orders": nb_en_orders + nb_di_orders,
         }
         self.simulation_data.append(info)
         
-    def send_all_trade(self):
+    def __close_and_store_all_trades(self):
+        while len(self.en_orders) > 0:
+            for order in self.en_orders:
+                self.money += (order.value*(1-self.fees))
+                order.close_time = self.hist_data[-1][-1]
+                order.close_cause = "NONE"
+                self.di_orders.append(order)
+                self.en_orders.remove(order)
+            
         for order in self.di_orders:
             info = {
             "opentime": order.opentime,
@@ -106,15 +125,42 @@ class Simulation():
             "close_cause": order.close_cause,
             }
             self.simulation_orders.append(info)
+                    
+    def __fitness_score(self):
+        # Coef ----------------------
+        coefs = [0.5, 1.25, 0.75]
+        
+        # Intermediate Calcul -------
+        self.money_earn = self.simulation_data[-1]["all_money"] - self.initial_money
+        day_gain = []
+        for i in range(96, len(self.simulation_data), 96):
+            day_gain.append(self.simulation_data[i]["all_money"] / self.simulation_data[i-96]["all_money"]) 
+        self.max_drawdown = np.abs((np.min(day_gain)-1)*100)
+        
+        # fitness value -------------
+        # self.fitness += self.money_earn*coefs[0]
+        # self.fitness += len(self.di_orders)*coefs[1]
+        # self.fitness /= self.max_drawdown*coefs[2]
+        print(np.cbrt(self.money_earn))
+        print(np.log1p(len(self.di_orders))/2)
+        print(-self.max_drawdown)
+        
+        self.fitness += np.cbrt(self.money_earn)
+        self.fitness += np.log1p(len(self.di_orders))/2
+        self.fitness -= self.max_drawdown
+    
+    def export_sim_data(self):
+        def NumpyArraytoCSV(array, file_path):
+            """Convertit un tableau NumPy en fichier CSV."""
+            df = pd.DataFrame(array)
+            df.to_csv(file_path, index=False)
             
-        return self.simulation_orders
+        NumpyArraytoCSV(sim1.simulation_data, f'Output_Data\\Simulation{self.ID}_main_data.csv')
+        NumpyArraytoCSV(sim1.simulation_orders, f'Output_Data\\Simulation{self.ID}_trade_data.csv')
     
 #  Main ------------------------------------------------------------------------
-historical_data = CSVtoNumpyArray('DF_ETHUSDT_15m.csv')
-sim1 = Simulation(10000, historical_data)
+historical_data = CSVtoNumpyArray('Input_Data\\DF_ETHUSDT_15m.csv')
+sim1 = Simulation(sim_id=1, init_money=10000, hist_data=historical_data)
+print(sim1.start())
+sim1.export_sim_data()
 
-for i in tqdm(range(len(historical_data))):
-    sim1.step()
-       
-NumpyArraytoCSV(sim1.simulation_data, 'sim_data.csv')
-NumpyArraytoCSV(sim1.send_all_trade(), 'trade_data.csv')
