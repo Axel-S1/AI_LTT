@@ -1,14 +1,7 @@
 import numpy as np
 import pandas as pd
 import random as r
-from tqdm import tqdm 
-
-def CSVtoNumpyArray(file_path):
-    """Convertit un fichier CSV en tableau NumPy."""
-    data = pd.read_csv(file_path)
-    return data.to_numpy()
-
-FIRST_ORDER_INFO = ["long"]
+from tqdm import tqdm    
 
 class Order():
     def __init__(self, ref_opentime, ref_leverage, ref_value, ref_SL, ref_TP):
@@ -41,13 +34,16 @@ class Order():
             return False
 
 class Simulation():
-    def __init__(self, sim_id, init_money, hist_data):
+    def __init__(self, sim_id, init_money, nn, path_hist_data):
         
         self.ID = sim_id
-        self.hist_data = hist_data
+        self.nn = nn
+        self.path_hist_data = path_hist_data
+        self.hist_data = self.__get_data()
         
         self.fees = 2e-4
         self.min_bid = 25
+        self.len_frame = 96
         self.initial_money = init_money
         self.money = init_money
         
@@ -56,51 +52,63 @@ class Simulation():
         
         self.simulation_data = []
         self.simulation_orders = []
-        self.fitness = 0
+        self.fitness = -2e10
         
     def start(self):
-        for i in range(len(historical_data)-1):
-            sim1.step()
+        for i in range(len(self.hist_data)-self.len_frame-1):
+            self.step(i)
+            if self.simulation_data[-1]["all_money"] < self.initial_money*0.5:
+                break
             
         self.__close_and_store_all_trades()
-        self.__update_info()
+        self.__update_info(i)
         self.__fitness_score()
         return self.fitness
         
-    def step(self):
-        # TODO : une IA qui choisira si elle veux faire un ordre (long ou rien).
-        # Avec les params de levier, valeur de l'ordre et les "stop loss and take profit".
-        if r.randint(0, 100) == 3: # temporaire
-            self.__make_order(self.hist_data[0][-1], 5, self.money*0.05, 0.8, 1.2) # temporaire
+    def step(self, i):
+        self.__update_info(i)
+        
+        step_data = (list(self.hist_data[i:i+self.len_frame , 1:5].flatten()))
+        step_data = step_data + [self.simulation_data[-1]["wallet_money"], self.simulation_data[-1]["invest_money"], self.simulation_data[-1]["nb_en_orders"]]
+        output = self.nn.activate(tuple(step_data))
+             
+        if output[0] > 0.5:
+            self.__make_order(self.hist_data[i, 0], int(output[1]*10), self.money*output[2], output[3], output[4]) # temporaire
             
         for order in self.en_orders:
-            if order.step(self.hist_data[0]):
+            if order.step(self.hist_data[i]):
                 self.money += (order.value*(1-self.fees))
                 self.di_orders.append(order)
                 self.en_orders.remove(order)
-                    
-        self.__update_info()
-        self.hist_data = self.hist_data[1:]
+        
+    def export_sim_data(self):
+        def NumpyArraytoCSV(array, file_path):
+            df = pd.DataFrame(array)
+            df.to_csv(file_path, index=False)
+            
+        NumpyArraytoCSV(sim1.simulation_data, f'Output_Data\\Simulation{self.ID}_main_data.csv')
+        NumpyArraytoCSV(sim1.simulation_orders, f'Output_Data\\Simulation{self.ID}_trade_data.csv')
+        
+    def __get_data(self):
+        data = pd.read_csv(self.path_hist_data)
+        return (data.to_numpy())
             
     def __make_order(self, ref_opentime, ref_leverage, ref_value, ref_SL, ref_TP):
         if self.money >= ref_value and ref_value >= self.min_bid:
             self.money -= ref_value*(1+self.fees)
             self.en_orders.append(Order(ref_opentime, ref_leverage, ref_value, ref_SL, ref_TP))
     
-    def __update_info(self):
+    def __update_info(self, i):
         # Calcul des informations pour chaque étape
         invest_money = sum(order.value for order in self.en_orders)
-        nb_en_orders = len(self.en_orders)
-        nb_di_orders = len(self.di_orders)
         # Ajout des informations à l'historique
         info = {
-            "timestamp" : self.hist_data[0][0],
+            "timestamp" :   self.hist_data[i][0],
             "wallet_money": self.money, #
             "invest_money": invest_money, #
-            "all_money" : self.money + invest_money,
-            "nb_en_orders": nb_en_orders, #
-            "nb_di_orders": nb_di_orders,
-            "nb_any_orders": nb_en_orders + nb_di_orders,
+            "all_money" :   self.money + invest_money,
+            "nb_en_orders": len(self.en_orders), #
+            "nb_di_orders": len(self.di_orders),
         }
         self.simulation_data.append(info)
         
@@ -137,30 +145,9 @@ class Simulation():
             day_gain.append(self.simulation_data[i]["all_money"] / self.simulation_data[i-96]["all_money"]) 
         self.max_drawdown = np.abs((np.min(day_gain)-1)*100)
         
-        # fitness value -------------
-        # self.fitness += self.money_earn*coefs[0]
-        # self.fitness += len(self.di_orders)*coefs[1]
-        # self.fitness /= self.max_drawdown*coefs[2]
-        print(np.cbrt(self.money_earn))
-        print(np.log1p(len(self.di_orders))/2)
-        print(-self.max_drawdown)
-        
+        # fitness value -------------        
         self.fitness += np.cbrt(self.money_earn)
-        self.fitness += np.log1p(len(self.di_orders))/2
+        self.fitness += np.log1p(len(self.di_orders))*0.5
         self.fitness -= self.max_drawdown
-    
-    def export_sim_data(self):
-        def NumpyArraytoCSV(array, file_path):
-            """Convertit un tableau NumPy en fichier CSV."""
-            df = pd.DataFrame(array)
-            df.to_csv(file_path, index=False)
-            
-        NumpyArraytoCSV(sim1.simulation_data, f'Output_Data\\Simulation{self.ID}_main_data.csv')
-        NumpyArraytoCSV(sim1.simulation_orders, f'Output_Data\\Simulation{self.ID}_trade_data.csv')
-    
-#  Main ------------------------------------------------------------------------
-historical_data = CSVtoNumpyArray('Input_Data\\DF_ETHUSDT_15m.csv')
-sim1 = Simulation(sim_id=1, init_money=10000, hist_data=historical_data)
-print(sim1.start())
-sim1.export_sim_data()
 
+#  Main ------------------------------------------------------------------------
