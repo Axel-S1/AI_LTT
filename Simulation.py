@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-import random as r
 from tqdm import tqdm    
 
 class Order():
@@ -44,6 +43,7 @@ class Simulation():
         self.fees = 2e-4
         self.min_bid = 25
         self.len_frame = 96
+        self.break_malus = 0
         self.initial_money = init_money
         self.money = init_money
         
@@ -52,12 +52,18 @@ class Simulation():
         
         self.simulation_data = []
         self.simulation_orders = []
-        self.fitness = -2e10
+        self.fitness = 0
         
     def start(self):
         for i in range(len(self.hist_data)-self.len_frame-1):
             self.step(i)
+            
             if self.simulation_data[-1]["all_money"] < self.initial_money*0.5:
+                self.break_malus = 50000
+                break
+            
+            elif i >= 15000 and self.simulation_data[-1]["nb_di_orders"] < 20:
+                self.break_malus = 100000
                 break
             
         self.__close_and_store_all_trades()
@@ -86,12 +92,12 @@ class Simulation():
             df = pd.DataFrame(array)
             df.to_csv(file_path, index=False)
             
-        NumpyArraytoCSV(sim1.simulation_data, f'Output_Data\\Simulation{self.ID}_main_data.csv')
-        NumpyArraytoCSV(sim1.simulation_orders, f'Output_Data\\Simulation{self.ID}_trade_data.csv')
+        NumpyArraytoCSV(self.simulation_data, f'Output_Data\\Simulation{self.ID}_main_data.csv')
+        NumpyArraytoCSV(self.simulation_orders, f'Output_Data\\Simulation{self.ID}_trade_data.csv')
         
     def __get_data(self):
-        data = pd.read_csv(self.path_hist_data)
-        return (data.to_numpy())
+        data = pd.read_csv(self.path_hist_data).to_numpy()
+        return data[-105192:,:]
             
     def __make_order(self, ref_opentime, ref_leverage, ref_value, ref_SL, ref_TP):
         if self.money >= ref_value and ref_value >= self.min_bid:
@@ -143,11 +149,16 @@ class Simulation():
         day_gain = []
         for i in range(96, len(self.simulation_data), 96):
             day_gain.append(self.simulation_data[i]["all_money"] / self.simulation_data[i-96]["all_money"]) 
-        self.max_drawdown = np.abs((np.min(day_gain)-1)*100)
+        
+        if len(day_gain) > 0:
+            self.max_drawdown = np.abs((np.min(day_gain)-1)*100)
+        else:
+            self.max_drawdown = 0
+
         
         # fitness value -------------        
-        self.fitness += np.cbrt(self.money_earn)
+        self.fitness += self.money_earn
         self.fitness += np.log1p(len(self.di_orders))*0.5
-        self.fitness -= self.max_drawdown
-
-#  Main ------------------------------------------------------------------------
+        self.fitness /= (self.max_drawdown + 1)
+        
+        self.fitness -= self.break_malus
